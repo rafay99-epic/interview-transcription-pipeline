@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audio Transcription</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1rem; }
+  #status { margin: 1rem 0; color: #555; }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: .3rem .6rem; border-top: 1px solid #ddd; vertical-align: top; }
+  td.t { white-space: nowrap; color: #777; font-variant-numeric: tabular-nums; }
+  #text { margin-top: 1.5rem; padding: 1rem; background: #f6f6f6; border-radius: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Audio Transcription</h1>
+
+<input type="file" id="file-input" accept="audio/*,video/*">
+<div id="status"></div>
+<table id="segments"></table>
+<div id="text" hidden></div>
+
+<script>
+const statusEl = document.getElementById("status");
+const table = document.getElementById("segments");
+const textEl = document.getElementById("text");
+
+// Short files come back on the request itself; anything longer goes through the
+// job API so the browser is not left waiting on an open connection.
+const INLINE_LIMIT_SECONDS = 120;
+
+document.getElementById("file-input").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  table.innerHTML = "";
+  textEl.hidden = true;
+  statusEl.textContent = `Uploading ${file.name} (${(file.size / 1e6).toFixed(1)} MB)...`;
+
+  const body = new FormData();
+  body.append("file", file);
+
+  try {
+    // Try the inline route first. The server replies 413 with the duration if
+    // the file is too long for it, and we fall through to a job.
+    let res = await fetch("/transcribe", { method: "POST", body });
+    if (res.status === 413) {
+      statusEl.textContent = "Long file — queuing a background job...";
+      res = await fetch("/jobs", { method: "POST", body });
+      if (!res.ok) throw new Error((await res.json()).detail);
+      render(await poll((await res.json()).id));
+      return;
+    }
+    if (!res.ok) throw new Error((await res.json()).detail);
+    render(await res.json());
+  } catch (err) {
+    statusEl.textContent = `Failed: ${err.message}`;
+  }
+});
+
+async function poll(id) {
+  while (true) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const job = await (await fetch(`/jobs/${id}`)).json();
+    if (job.status === "failed") throw new Error(job.error);
+    if (job.status === "done") return job.result;
+    statusEl.textContent = `Transcribing... ${Math.round(job.progress * 100)}%`;
+  }
+}
+
+function render(result) {
+  statusEl.textContent =
+    `${result.language} · ${result.duration.toFixed(1)}s · ` +
+    `${result.segments.length} segments · ${result.chunks} window(s)`;
+  table.innerHTML = result.segments
+    .map((s) => `<tr><td class="t">${fmt(s.start)} – ${fmt(s.end)}</td><td>${escape(s.text)}</td></tr>`)
+    .join("");
+  textEl.textContent = result.text;
+  textEl.hidden = false;
+}
+
+const fmt = (s) =>
+  `${String(Math.floor(s / 60)).padStart(2, "0")}:${(s % 60).toFixed(1).padStart(4, "0")}`;
+
+const escape = (s) =>
+  s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+</script>
+
+</body>
+</html>

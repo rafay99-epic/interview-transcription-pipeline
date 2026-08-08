@@ -1,0 +1,5 @@
+# Requires ffmpeg + ffprobe on PATH (brew install ffmpeg / apt install ffmpeg)
+faster-whisper==1.2.1
+fastapi
+uvicorn[standard]
+python-multipart
